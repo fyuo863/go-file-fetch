@@ -1,6 +1,0 @@
-### 测试 GET 请求
-GET web
-
-### 测试 HEAD 请求
-HEAD http://localhost:8090/multimedia-exp1.zip
-
