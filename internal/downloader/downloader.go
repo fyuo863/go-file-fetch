@@ -100,6 +100,7 @@ func FlushMetaToFooter(file *os.File, realSize int64, sm *SafeMetaFooter) error 
 
 // ReadMetaFromFooter 从已有的文件末尾尝试反序列化出历史下载进度
 func ReadMetaFromFooter(file *os.File) (*SafeMetaFooter, error) {
+	log.Logger.Info("Downloader", "ReadMetaFromFooter")
 	stat, err := file.Stat()
 	if err != nil {
 		return nil, err
@@ -115,13 +116,13 @@ func ReadMetaFromFooter(file *os.File) (*SafeMetaFooter, error) {
 		return nil, err
 	}
 	jsonLen := int64(binary.BigEndian.Uint32(lenBuf))
-
+	log.Logger.Info("Downloader", "读取控制块长度, jsonLen", jsonLen)
 	if jsonLen <= 0 || jsonLen > fileLen-4 || jsonLen > 4092 {
 		return nil, fmt.Errorf("非法的控制块长度")
 	}
 
 	// 2. 读出前面的 JSON 字节
-	jsonOffset := fileLen - 4 - jsonLen
+	jsonOffset := fileLen - 4096
 	jsonData := make([]byte, jsonLen)
 	if _, err := file.ReadAt(jsonData, jsonOffset); err != nil {
 		return nil, err
@@ -132,6 +133,8 @@ func ReadMetaFromFooter(file *os.File) (*SafeMetaFooter, error) {
 	if err := json.Unmarshal(jsonData, &mf); err != nil {
 		return nil, err
 	}
+
+	log.Logger.Info("Downloader", "chunks", mf.Chunks)
 
 	return &SafeMetaFooter{
 		Url:       mf.Url,
@@ -154,7 +157,7 @@ func DownloadManager(threads int) {
 	// 用 OpenFile 打开，若文件已存在则不破坏它，供断点续传恢复
 	tmpFileName, f, err := NewFile()
 	if err != nil {
-		log.Logger.Error("Downloader", "创建或打开文件占位失败", "error", err)
+		log.Logger.Error("Downloader", "创建或打开文件占位失败,error", err)
 		return
 	}
 
@@ -182,11 +185,12 @@ func DownloadManager(threads int) {
 
 	// 尝试从历史控制块中读取历史进度
 	historyMeta, err := ReadMetaFromFooter(f)
-	if err == nil && historyMeta.Url == config.UI.Url && len(historyMeta.Chunks) == threadCount {
-		log.Logger.Info("Downloader", "检测到历史残留的进度记录，正在拉取断点准备续传...")
+
+	if err == nil && len(historyMeta.Chunks) == threadCount {
+		log.Logger.Info("Downloader", "进度记录", true)
 		globalMeta.Chunks = historyMeta.Chunks
 	} else {
-		log.Logger.Info("Downloader", "未发现历史记录或配置变更，正在全新划分下载切片...")
+		log.Logger.Info("Downloader", "进度记录", false)
 		// 如果是全新的任务，且支持切片，进行第一次切片区间划分
 		if config.UI.AcceptRanges && config.UI.Size > 0 {
 			for i := 0; i < threadCount; i++ {
@@ -276,7 +280,7 @@ logLoop:
 			}
 		case <-sigCh:
 			// 🎯 核心：当用户按下 Ctrl+C 时，会瞬间击中这里
-			log.Logger.Warn("Downloader", "⚠️ 接收到 Ctrl+C 中断信号！正在紧急保存当前进度快照...")
+			log.Logger.Warn("Downloader", "Ctrl+C", true)
 			hasError = true // 强制标记为错误，通知 FileRename 保持 .tmp 后缀不被削尾
 
 			// 强行把当前内存里的最新进度往文件末尾刷一次盘
@@ -341,7 +345,7 @@ func FileRename(f *os.File, tmpFileName string, hasError bool) error {
 			}
 		} else {
 			// 如果有错，保留带有 4KB 记录的 .tmp 文件，方便用户重启程序断点续传
-			log.Logger.Warn("Downloader", "任务未完成，已在文件尾部暂存断点，下次启动可自动续传", "file", tmpFileName)
+			log.Logger.Warn("Downloader", "任务未完成，已在文件尾部暂存断点，下次启动可自动续传,file", tmpFileName)
 		}
 	}
 	return nil
@@ -411,5 +415,5 @@ func End(fileName string, hasError bool) {
 	if hasError {
 		return
 	}
-	log.Logger.Info("End", "🎉 下载任务已圆满完成！", "文件", fileName)
+	log.Logger.Info("End", "下载完成", fileName)
 }
