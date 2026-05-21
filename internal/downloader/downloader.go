@@ -149,7 +149,11 @@ func ReadMetaFromFooter(file *os.File) (*SafeMetaFooter, error) {
 
 func SetupDownload(threads int) {
 	HandlerInit()
-	HandleInfo() // 获取文件信息
+	err := HandleInfo() // 获取文件信息
+	if err != nil {
+		log.Logger.Error("Downloader", "获取文件信息失败", err)
+		return
+	}
 	DownloadManager(threads)
 }
 
