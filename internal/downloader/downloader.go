@@ -170,7 +170,10 @@ func DownloadManager(threads int) {
 	// 无论发生什么，最后都由主线程来统一安全关闭和重命名
 	// 传递 hasError 状态，用来在最后一秒决定是“截断去尾”还是“保留断点”
 	defer func() {
-		FileRename(f, tmpFileName, hasError)
+		err := FileRename(f, tmpFileName, hasError)
+		if err != nil {
+			log.Logger.Error("Downloader", "文件重命名失败", err)
+		}
 	}()
 
 	threadCount := 1
