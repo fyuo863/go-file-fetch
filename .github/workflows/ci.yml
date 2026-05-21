@@ -62,8 +62,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goos: [ linux, darwin, windows ]
-        goarch: [ amd64, arm64 ]
+        goos: [ linux, windows ]
+        goarch: [ arm64 ]
         exclude:
           - goos: windows
             goarch: arm64
@@ -79,7 +79,7 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
           mkdir -p output
           # 确保路径指向 main.go 所在的子目录
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o output/downloader-${{ matrix.goos }}-${{ matrix.goarch }}$EXT ./cmd/go-fatch
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o output/downloader-${{ matrix.goos }}-${{ matrix.goarch }}$EXT .
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
