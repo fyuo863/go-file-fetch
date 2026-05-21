@@ -86,7 +86,7 @@ jobs:
           name: downloader-${{ matrix.goos }}-${{ matrix.goarch }}
           path: output/
 
-  # 4. 发布 Release
+# 4. 发布 Release
   release:
     name: Create Release
     needs: build
@@ -97,19 +97,24 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-artifacts
+
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
           artifacts: "release-artifacts/**/*"
           tag: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
+          generateReleaseNotes: true
           body: |
             项目自动发布。
             - 构建自 commit: `${{ github.sha }}`
+            
+            ---
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Send DingTalk Notification
