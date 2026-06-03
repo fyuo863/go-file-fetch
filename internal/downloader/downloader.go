@@ -213,54 +213,64 @@ func DownloadManager(threads int) {
 					Current: int64(start), // 初始当前位置等于区间起点
 				})
 			}
+		} else {
+			// 💡 修复 1：哪怕是单线程/不支持断点的链接，也要给它塞 1 个 Chunk，用来给内存累加进度！
+			globalMeta.Chunks = append(globalMeta.Chunks, ChunkProgress{
+				Index:   0,
+				Start:   0,
+				End:     config.UI.Size,
+				Current: 0,
+			})
 		}
 	}
 
-	// 启动异步定时刷盘守护协程
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	defer cancelCtx()
-	if config.UI.AcceptRanges && config.UI.Size > 0 {
-		go func(ctx context.Context, file *os.File, realSize int64, sm *SafeMetaFooter) {
-			ticker := time.NewTicker(200 * time.Millisecond) // 每 200 毫秒高频刷新一次文件尾
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					_ = FlushMetaToFooter(file, realSize, sm)
-				case <-ctx.Done():
-					// 临退场前，发起最后一次强制冲刷，确保进度 100% 精准
-					_ = FlushMetaToFooter(file, realSize, sm)
-					return
+	// 💡 全局上下文控制，统一管理退出
+	globalCtx, cancelAll := context.WithCancel(context.Background())
+	defer cancelAll() // 确保函数退出时释放资源
+
+	// 启动异步定时刷盘与进度刷新守护协程
+	go func(ctx context.Context, file *os.File, sm *SafeMetaFooter) {
+		ticker := time.NewTicker(200 * time.Millisecond) // 每 200ms 刷新控制台
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				// 物理刷盘依然只针对支持断点续传的任务
+				if config.UI.AcceptRanges && config.UI.Size > 0 {
+					_ = FlushMetaToFooter(file, config.UI.Size, sm)
 				}
+				PrintProgress(sm) // 👈 无论如何，刷新进度条
+			case <-ctx.Done():
+				// 临退场前，发起最后一次强制冲刷
+				if config.UI.AcceptRanges && config.UI.Size > 0 {
+					_ = FlushMetaToFooter(file, config.UI.Size, sm)
+				}
+				PrintProgress(sm)
+				fmt.Println() // 下载结束时换行，防止终端提示符错乱
+				return
 			}
-		}(ctx, f, config.UI.Size, globalMeta)
-	}
+		}
+	}(globalCtx, f, globalMeta)
 
 	// 分流：多线程切片 vs 单线程全量流式
 	if config.UI.AcceptRanges && config.UI.Size > 0 {
-		log.Logger.Info("Downloader", "AcceptRanges", config.UI.AcceptRanges, "threads", threads)
 		for i := 0; i < threadCount; i++ {
 			chunk := globalMeta.Chunks[i]
-
-			// 如果该切片之前在历史记录中已经全下完了，直接跳过它
 			if chunk.Current > chunk.End {
 				continue
 			}
-
 			Wg.Add(1)
 			go func(c ChunkProgress) {
 				defer Wg.Done()
-				// 将续传指针 c.Current 作为请求开头传给 Worker
-				Worker(errCh, f, c.Current, c.End, true, globalMeta, c.Index)
+				// 💡 核心修复 2：把 globalCtx 传给 Worker
+				Worker(globalCtx, errCh, f, c.Current, c.End, true, globalMeta, c.Index)
 			}(chunk)
 		}
 	} else {
-		log.Logger.Info("Downloader", "AcceptRanges", config.UI.AcceptRanges, "threads", 1)
 		Wg.Add(1)
 		go func() {
 			defer Wg.Done()
-			// 非 Range 链接（如 GitHub Chunked 传输），globalMeta 传 nil
-			Worker(errCh, f, 0, -1, false, nil, 0)
+			Worker(globalCtx, errCh, f, 0, -1, false, globalMeta, 0)
 		}()
 	}
 
@@ -278,30 +288,23 @@ logLoop:
 		select {
 		case err, ok := <-errCh:
 			if !ok {
-				// 当所有 Worker 正常结束且 errCh 被关闭时，退出整个大循环
 				break logLoop
 			}
 			if err != nil {
 				log.Logger.Error("Downloader", "下载过程中收到错误", "error", err)
 				hasError = true
+				cancelAll() // 💡 核心修复 3：一旦发生致命错误，立刻掐断所有其他线程的网络请求
 			}
 		case <-sigCh:
-			// 🎯 核心：当用户按下 Ctrl+C 时，会瞬间击中这里
 			log.Logger.Warn("Downloader", "Ctrl+C", true)
-			hasError = true // 强制标记为错误，通知 FileRename 保持 .tmp 后缀不被削尾
-
-			// 强行把当前内存里的最新进度往文件末尾刷一次盘
+			hasError = true
+			cancelAll() // 💡 核心修复 4：用户中断时，瞬间掐断所有下载线程
 			if config.UI.Size > 0 {
 				_ = FlushMetaToFooter(f, config.UI.Size, globalMeta)
 			}
-
-			// 善后：触发 defer 中的 FileRename（关闭文件指针），然后安全闪人
 			return
 		}
 	}
-
-	// 全线收工，注销定时刷盘器
-	cancelCtx()
 
 	// 传递成功/失败标志给尾部报告处理
 	End(config.UI.FileName, hasError)
@@ -358,10 +361,7 @@ func FileRename(f *os.File, tmpFileName string, hasError bool) error {
 	return nil
 }
 
-func Worker(errCh chan<- error, file *os.File, start, end int64, useRange bool, globalMeta *SafeMetaFooter, chunkIndex int) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+func Worker(ctx context.Context, errCh chan<- error, file *os.File, start, end int64, useRange bool, globalMeta *SafeMetaFooter, chunkIndex int) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.UI.Url, nil)
 	if err != nil {
 		errCh <- err
@@ -371,7 +371,10 @@ func Worker(errCh chan<- error, file *os.File, start, end int64, useRange bool, 
 	if useRange {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
 	}
-	req.Header.Set("User-Agent", config.UI.UserAgent)
+	req.Header.Set("User-Agent", config.UI.UserHeaders.UserAgent)
+	req.Header.Set("Sec-CH-UA", config.UI.UserHeaders.SecChUa)
+	req.Header.Set("Sec-CH-UA-Mobile", config.UI.UserHeaders.SecChUaMobile)
+	req.Header.Set("Sec-CH-UA-Platform", config.UI.UserHeaders.SecChUaPlatform)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -423,4 +426,25 @@ func End(fileName string, hasError bool) {
 		return
 	}
 	log.Logger.Info("End", "下载完成", fileName)
+}
+
+func PrintProgress(sm *SafeMetaFooter) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	var downloaded int64
+	for _, c := range sm.Chunks {
+		if c.Current > c.Start {
+			downloaded += (c.Current - c.Start)
+		}
+	}
+
+	// 💡 修复：如果服务器不给文件总大小，我们就只显示当前下载了多少 MB
+	if sm.TotalSize <= 0 {
+		fmt.Printf("\r🚀 下载进度: 大小未知, 已接收: %.2f MB", float64(downloaded)/1024/1024)
+		return
+	}
+
+	percent := float64(downloaded) / float64(sm.TotalSize) * 100
+	fmt.Printf("\r🚀 下载进度: %.2f%% (%d/%d bytes)", percent, downloaded, sm.TotalSize)
 }

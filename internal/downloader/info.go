@@ -11,7 +11,10 @@ import (
 
 func HandleInfo() error {
 	req, _ := http.NewRequest("GET", config.UI.Url, nil)
-	req.Header.Set("User-Agent", config.UI.UserAgent)
+	req.Header.Set("User-Agent", config.UI.UserHeaders.UserAgent)
+	req.Header.Set("Sec-CH-UA", config.UI.UserHeaders.SecChUa)
+	req.Header.Set("Sec-CH-UA-Mobile", config.UI.UserHeaders.SecChUaMobile)
+	req.Header.Set("Sec-CH-UA-Platform", config.UI.UserHeaders.SecChUaPlatform)
 	req.Header.Set("Range", "bytes=0-0")
 
 	resp, err := Client.HTTPClient.Do(req)
