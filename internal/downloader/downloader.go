@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -315,7 +316,12 @@ logLoop:
 // ==========================================
 
 func NewFile() (string, *os.File, error) {
-	tmpFileName := config.UI.FileName + ".tmp"
+	// 确保下载目录存在
+	if err := os.MkdirAll(config.UI.DownloadDir, 0755); err != nil {
+		return "", nil, err
+	}
+
+	tmpFileName := filepath.Join(config.UI.DownloadDir, config.UI.FileName+".tmp")
 
 	// 允许读写，文件存在时不截断它（不使用 os.Create，防止清除未下载完的文件）
 	f, err := os.OpenFile(tmpFileName, os.O_RDWR|os.O_CREATE, 0666)
@@ -350,7 +356,8 @@ func FileRename(f *os.File, tmpFileName string, hasError bool) error {
 	} else {
 		// 如果无错，剥离 .tmp 后缀恢复正常文件名
 		if !hasError {
-			if err := os.Rename(tmpFileName, config.UI.FileName); err != nil {
+			finalName := filepath.Join(config.UI.DownloadDir, config.UI.FileName)
+			if err := os.Rename(tmpFileName, finalName); err != nil {
 				log.Logger.Error("Downloader", "重命名文件失败", "error", err)
 			}
 		} else {
@@ -441,10 +448,10 @@ func PrintProgress(sm *SafeMetaFooter) {
 
 	// 💡 修复：如果服务器不给文件总大小，我们就只显示当前下载了多少 MB
 	if sm.TotalSize <= 0 {
-		fmt.Printf("\r🚀 下载进度: 大小未知, 已接收: %.2f MB", float64(downloaded)/1024/1024)
+		fmt.Printf("\r > 下载进度: 大小未知, 已接收: %.2f MB", float64(downloaded)/1024/1024)
 		return
 	}
 
 	percent := float64(downloaded) / float64(sm.TotalSize) * 100
-	fmt.Printf("\r🚀 下载进度: %.2f%% (%d/%d bytes)", percent, downloaded, sm.TotalSize)
+	fmt.Printf("\r > 下载进度: %.2f%% (%d/%d bytes)", percent, downloaded, sm.TotalSize)
 }

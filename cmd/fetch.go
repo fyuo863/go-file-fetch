@@ -8,7 +8,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var ThreadCount int
+var (
+	ThreadCount int
+	DownloadDir string
+)
 
 func init() {
 	// 将 fetchCmd 添加到根命令中
@@ -16,6 +19,8 @@ func init() {
 	log.LogSetting()
 	// 添加一个可选的 flag 参数：-t 或 --threads，默认 4 线程
 	fetchCmd.Flags().IntVarP(&ThreadCount, "threads", "t", 4, "并发下载的线程数")
+	// 添加一个可选的 flag 参数：-d 或 --dir，指定下载目录，默认当前目录
+	fetchCmd.Flags().StringVarP(&DownloadDir, "dir", "d", ".", "下载保存目录")
 }
 
 var fetchCmd = &cobra.Command{
@@ -26,7 +31,7 @@ var fetchCmd = &cobra.Command{
 		targetURL := args[0]
 
 		// 调用 downloader 包的函数，把参数传过去
-		config.ConfigInit(targetURL, ThreadCount)
+		config.ConfigInit(targetURL, ThreadCount, DownloadDir)
 		downloader.SetupDownload(ThreadCount)
 	},
 }
