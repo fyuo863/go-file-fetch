@@ -50,6 +50,9 @@ func getFileInfo(resp *http.Response) {
 }
 
 func getFileName(resp *http.Response) {
+	// 🔧 修复：trim 掉命令行残留的双引号，防止污染文件名
+	config.UI.Url = strings.Trim(config.UI.Url, "\"")
+
 	// 1. 优先尝试从 Header 获取 (最准确，因为带后缀)
 	contentDisposition := resp.Header.Get("Content-Disposition")
 	if contentDisposition != "" {

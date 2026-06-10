@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -169,7 +170,7 @@ func DownloadManager(threads int) {
 	var hasError bool // 状态追踪：标记整个下载期是否遇到致命异常
 
 	// 无论发生什么，最后都由主线程来统一安全关闭和重命名
-	// 传递 hasError 状态，用来在最后一秒决定是“截断去尾”还是“保留断点”
+	// 传递 hasError 状态，用来在最后一秒决定是"截断去尾"还是"保留断点"
 	defer func() {
 		err := FileRename(f, tmpFileName, hasError)
 		if err != nil {
@@ -321,7 +322,12 @@ func NewFile() (string, *os.File, error) {
 		return "", nil, err
 	}
 
-	tmpFileName := filepath.Join(config.UI.DownloadDir, config.UI.FileName+".tmp")
+	// 🔧 修复：清除文件名中所有 Windows 非法字符 (双引号/冒号/反斜杠等)
+	rawName := config.UI.FileName
+	cleanName := sanitizeFilename(rawName)
+	log.Logger.Info("NewFile", "raw", rawName, "clean", cleanName)
+
+	tmpFileName := filepath.Join(config.UI.DownloadDir, cleanName+".tmp")
 
 	// 允许读写，文件存在时不截断它（不使用 os.Create，防止清除未下载完的文件）
 	f, err := os.OpenFile(tmpFileName, os.O_RDWR|os.O_CREATE, 0666)
@@ -343,6 +349,23 @@ func NewFile() (string, *os.File, error) {
 	return tmpFileName, f, nil
 }
 
+// sanitizeFilename 清除文件名中所有 Windows 不允许的字符
+// 不允许的字符：\ / : * ? " < > |
+func sanitizeFilename(name string) string {
+	name = strings.ReplaceAll(name, "\"", "")
+	name = strings.ReplaceAll(name, "'", "")
+	name = strings.ReplaceAll(name, "*", "")
+	name = strings.ReplaceAll(name, "?", "")
+	name = strings.ReplaceAll(name, "<", "")
+	name = strings.ReplaceAll(name, ">", "")
+	name = strings.ReplaceAll(name, "|", "")
+	name = strings.ReplaceAll(name, ":", "")
+	name = strings.ReplaceAll(name, "\\", "")
+	name = strings.ReplaceAll(name, "/", "")
+	name = strings.TrimSpace(name)
+	return name
+}
+
 func FileRename(f *os.File, tmpFileName string, hasError bool) error {
 	// 如果完整下载，没有抛出错误，启动 Truncate 系统调用，0 毫秒瞬间削掉 4KB 尾巴！
 	if !hasError && config.UI.Size > 0 {
@@ -356,7 +379,7 @@ func FileRename(f *os.File, tmpFileName string, hasError bool) error {
 	} else {
 		// 如果无错，剥离 .tmp 后缀恢复正常文件名
 		if !hasError {
-			finalName := filepath.Join(config.UI.DownloadDir, config.UI.FileName)
+			finalName := filepath.Join(config.UI.DownloadDir, sanitizeFilename(config.UI.FileName))
 			if err := os.Rename(tmpFileName, finalName); err != nil {
 				log.Logger.Error("Downloader", "重命名文件失败", "error", err)
 			}

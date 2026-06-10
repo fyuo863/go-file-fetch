@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"fmt"
 	"go-file-fetch/internal/config"
 	"go-file-fetch/internal/downloader"
 	"go-file-fetch/pkg/log"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -29,6 +31,12 @@ var fetchCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1), // 严格限制必须且只能传入 1 个参数 (URL)
 	Run: func(cmd *cobra.Command, args []string) {
 		targetURL := args[0]
+
+		// 🔧 修复：强力清除命令行残留的引号和空白字符
+		targetURL = strings.Trim(targetURL, "\"' ")
+		targetURL = strings.TrimSpace(targetURL)
+
+		fmt.Printf("[DEBUG] 收到的 URL: %q\n", targetURL)
 
 		// 调用 downloader 包的函数，把参数传过去
 		config.ConfigInit(targetURL, ThreadCount, DownloadDir)
