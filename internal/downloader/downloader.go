@@ -18,6 +18,7 @@ import (
 )
 
 var Wg sync.WaitGroup
+var downloadStartTime time.Time
 
 // ==========================================
 // 💡 核心改良：解耦「控制体」与「纯数据体」
@@ -150,6 +151,7 @@ func ReadMetaFromFooter(file *os.File) (*SafeMetaFooter, error) {
 // ==========================================
 
 func SetupDownload(threads int) {
+	downloadStartTime = time.Now() // 记录下载开始时间，用于 ETA 估算
 	HandlerInit()
 	err := HandleInfo() // 获取文件信息
 	if err != nil {
@@ -469,12 +471,51 @@ func PrintProgress(sm *SafeMetaFooter) {
 		}
 	}
 
+	elapsed := time.Since(downloadStartTime)
+	elapsedSec := elapsed.Seconds()
+
 	// 💡 修复：如果服务器不给文件总大小，我们就只显示当前下载了多少 MB
 	if sm.TotalSize <= 0 {
-		fmt.Printf("\r > 下载进度: 大小未知, 已接收: %.2f MB", float64(downloaded)/1024/1024)
+		speed := float64(downloaded) / elapsedSec / 1024 / 1024
+		fmt.Printf("\r > 下载进度: 大小未知, 已接收: %.2f MB, 速率: %.2f MB/s",
+			float64(downloaded)/1024/1024, speed)
 		return
 	}
 
 	percent := float64(downloaded) / float64(sm.TotalSize) * 100
-	fmt.Printf("\r > 下载进度: %.2f%% (%d/%d bytes)", percent, downloaded, sm.TotalSize)
+
+	// 计算下载速率 (MB/s)
+	speed := float64(downloaded) / elapsedSec / 1024 / 1024
+
+	// 计算剩余时间
+	var etaStr string
+	if elapsedSec > 1 && speed > 0 {
+		remaining := float64(sm.TotalSize-downloaded) / 1024 / 1024
+		etaSec := remaining / speed
+		etaStr = formatDuration(int(etaSec))
+	} else {
+		etaStr = "估算中..."
+	}
+
+	fmt.Printf("\r > 下载进度: %.2f%%, 速率: %.2f MB/s, 剩余: %s",
+		percent, speed, etaStr)
+}
+
+// formatDuration 将秒数转为可读的 XhXmXs / XmXs / Xs 格式
+func formatDuration(totalSec int) string {
+	if totalSec <= 0 {
+		return "0s"
+	}
+	h := totalSec / 3600
+	m := (totalSec % 3600) / 60
+	s := totalSec % 60
+
+	switch {
+	case h > 0:
+		return fmt.Sprintf("%dh%dm%ds", h, m, s)
+	case m > 0:
+		return fmt.Sprintf("%dm%ds", m, s)
+	default:
+		return fmt.Sprintf("%ds", s)
+	}
 }
